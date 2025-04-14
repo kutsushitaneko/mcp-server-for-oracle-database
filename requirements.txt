@@ -1,0 +1,4 @@
+oracledb
+python-dotenv
+sqlparse
+mcp
