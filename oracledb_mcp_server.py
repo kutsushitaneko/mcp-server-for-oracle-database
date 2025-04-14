@@ -330,6 +330,179 @@ def execute_oracle(query: str, params: dict = None, max_length: int = 1000, max_
             "encoding": "utf-8"
         }
         return json.dumps(error_response, ensure_ascii=False, indent=2)
+    
+@mcp.prompt()
+def oracle_query_assistant(query_type: str = "select") -> str:
+    """
+    execute_oracle（Oracle Databaseへのクエリ実行）をガイドするプロンプト
+    
+    引数:
+        query_type: 実行するSQLの種類（現在は'select'のみサポート）
+    """
+    
+    # 注意：現在サポートされているのはSELECTクエリのみ
+    support_notice = """
+    重要: 現在このツールではSELECTクエリのみがサポートされています。
+    INSERT、UPDATE、DELETEなどのデータ変更操作は実行できません。
+    """
+    
+    # クエリタイプ別のテンプレートとヒント
+    query_templates = {
+        "select": {
+            "template": "SELECT [列名] FROM [テーブル名] WHERE [条件]",
+            "example": "SELECT employee_id, first_name, last_name FROM employees WHERE department_id = :dept_id",
+            "params_example": {"dept_id": 10}
+        }
+    }
+    
+    # 選択されたクエリタイプの情報を取得（現在はselectのみ）
+    query_info = query_templates.get("select")
+    
+    # バインド変数の使用方法ガイド
+    bind_variable_guide = """
+    バインド変数の正しい使用方法:
+    
+    1. Oracleのバインド変数には ':変数名' の形式を使用します（例: :employee_id）
+    2. paramsパラメータには対応するJSONオブジェクトを渡します
+       正しい例: {"employee_id": 101, "department_id": 90}
+    3. 数値は数値型（整数や小数）、文字列は引用符付きで指定
+    4. 日付は 'YYYY-MM-DD' 形式の文字列で指定（例: '2023-04-15'）
+    """
+    
+    # パラメータバリデーションのヒント
+    validation_tips = """
+    一般的なエラーと解決策:
+    
+    1. ORA-00942: テーブルまたはビューが存在しません
+       → テーブル名のスペル、大文字小文字、スキーマ名を確認
+    
+    2. ORA-00904: 無効な列名
+       → 列名のスペルと大文字小文字を確認
+    
+    3. ORA-01722: 数値が無効です
+       → 数値型の列に文字列を渡していないか確認
+    
+    4. バインド変数エラー
+       → クエリ内の ':変数名' とparamsオブジェクトのキーが一致するか確認
+    """
+    
+    # パラメータのデータ型に関する明示的なガイド
+    parameter_type_guide = """
+    重要: パラメータのデータ型
+    
+    execute_oracleツールのパラメータには、以下のデータ型を正確に使用してください:
+    
+    1. query: 文字列型 (str)
+       正しい例: query="SELECT * FROM employees"
+       誤った例: query=SELECT * FROM employees (引用符がない)
+    
+    2. params: 辞書型 (dict) または None
+       正しい例: params={"emp_id": 101}
+       誤った例: params="emp_id: 101" (文字列になっている)
+    
+    3. max_length: 整数型 (int)
+       正しい例: max_length=2000
+       誤った例: max_length="2000" (文字列になっている)
+    
+    4. max_rows: 整数型 (int)
+       正しい例: max_rows=50
+       誤った例: max_rows="50" (文字列になっている)
+    
+    特に max_length と max_rows は必ず整数型として指定してください。
+    文字列型（引用符付き）で渡すとエラーの原因となります。
+    """
+    
+    # データ型の検証ステップ
+    type_validation_steps = """
+    パラメータのデータ型検証:
+    
+    ✓ queryは引用符で囲まれた文字列か?
+    ✓ paramsは波括弧{}で囲まれた辞書オブジェクトか?
+    ✓ max_lengthは引用符なしの整数値か?
+    ✓ max_rowsは引用符なしの整数値か?
+    
+    これらのデータ型の指定に問題があるとAPIエラーが発生します。
+    """
+    
+    # 実際の呼び出し例をより明確に
+    correct_call_examples = """
+    正しい呼び出し例:
+    
+    例1: 基本的な呼び出し
+    ```python
+    execute_oracle(
+        query="SELECT * FROM employees WHERE department_id = 50",
+        params=None,
+        max_rows=20,
+        max_length=2000
+    )
+    ```
+    
+    例2: バインド変数を使用
+    ```python
+    execute_oracle(
+        query="SELECT * FROM employees WHERE department_id = :dept_id",
+        params={"dept_id": 50},
+        max_rows=30,
+        max_length=3000
+    )
+    ```
+    
+    例3: max_lengthとmax_rowsを省略（デフォルト値を使用）
+    ```python
+    execute_oracle(
+        query="SELECT first_name, last_name FROM employees"
+    )
+    ```
+    
+    注意: max_lengthとmax_rowsを指定する場合は、必ず整数値（引用符なし）を使用してください。
+    """
+    
+    return f"""
+    Oracle Databaseに対してSELECTクエリを実行します。
+    
+    {support_notice}
+    
+    {parameter_type_guide}
+    
+    クエリテンプレート:
+    ```sql
+    {query_info["template"]}
+    ```
+    
+    具体例:
+    ```sql
+    {query_info["example"]}
+    ```
+    
+    パラメータ例:
+    ```json
+    {json.dumps(query_info["params_example"], ensure_ascii=False, indent=2)}
+    ```
+    
+    {bind_variable_guide}
+    
+    {validation_tips}
+    
+    {type_validation_steps}
+    
+    {correct_call_examples}
+    
+    ステップ1: ユーザーの意図を理解し、適切なSELECTクエリを構築してください。
+    ステップ2: 必要なバインド変数を特定し、正しい形式のparamsオブジェクトを作成してください。
+    ステップ3: クエリとパラメータを検証し、特にデータ型が正しいか確認してください。
+    ステップ4: 検証後、正しいデータ型を使用してexecute_oracleツールを呼び出してください:
+    
+    execute_oracle(
+        query="[検証済みSQLクエリ]",
+        params=[バインド変数オブジェクトまたはNone],
+        max_rows=[引用符なしの整数値],
+        max_length=[引用符なしの整数値]
+    )
+    
+    レスポンスが切り詰められた場合は、max_length値を整数で増やして再実行してください（例: max_length=5000）。
+    """
+
 
 @mcp.tool(
     name = "describe_table",
