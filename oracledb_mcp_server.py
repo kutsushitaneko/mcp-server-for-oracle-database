@@ -142,7 +142,7 @@ def format_results(cursor, results, max_length=1000):
             except Exception as e:
                 # エラーが発生した場合はエラーメッセージを表示
                 record_output.append(f"<表示エラー: {str(e)}>")
-            record_output.append("-" * 50)
+            record_output.append("-" * 5)
         
         # このレコードの文字列長を計算
         record_text = "\n".join(record_output)
@@ -558,9 +558,9 @@ def describe_table(table_name: str) -> str:
             # 結果を整形
             output = []
             output.append(f"\nテーブル: {table_name}")
-            output.append("-" * 80)
+            output.append("-" * 5)
             output.append("名前\t\t\t\tNULL?\t型\t\t\t長さ\tコメント")
-            output.append("-" * 80)
+            output.append("-" * 5)
             
             for column in columns:
                 column_name, data_type, data_length, nullable = column
