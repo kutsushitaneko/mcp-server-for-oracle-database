@@ -5,6 +5,7 @@ import sqlparse
 from dotenv import load_dotenv, find_dotenv
 import time
 from mcp.server.fastmcp import FastMCP
+import mcp.types as types
 import json
 
 # セキュリティ設定
@@ -110,7 +111,7 @@ def validate_query(query):
 
 def format_results(cursor, results, max_length=1000):
     """
-    検索結果を整形して文字列として返す関数
+    検索結果を整形してJSON形式で返す関数
     cursor: データベースカーソル
     results: 検索結果
     max_length: 出力テキスト全体の最大文字数（デフォルト: 1000）
@@ -121,58 +122,37 @@ def format_results(cursor, results, max_length=1000):
     # ヘッダー行の作成
     headers = [desc[0] for desc in cursor.description]
     
-    # 出力テキストを構築
-    output = []
-    total_length = 0
-    limit_reached = False
-    
-    for i, row in enumerate(results, 1):
-        # 各レコードの出力を構築
-        record_output = []
-        record_output.append(f"\n{i}件目")
-        
+    # JSON形式で結果を構築
+    json_results = []
+    for row in results:
+        record = {}
         for header, value in zip(headers, row):
-            record_output.append(f"{header}:")
             try:
-                # 値はすでに文字列に変換されているため、そのまま表示
+                # 値はすでに文字列に変換されているため、そのまま使用
                 if isinstance(value, bytes):
-                    record_output.append(value.decode('utf-8'))
+                    record[header] = value.decode('utf-8')
                 else:
-                    record_output.append(str(value))
+                    record[header] = value
             except Exception as e:
-                # エラーが発生した場合はエラーメッセージを表示
-                record_output.append(f"<表示エラー: {str(e)}>")
-            record_output.append("-" * 5)
-        
-        # このレコードの文字列長を計算
-        record_text = "\n".join(record_output)
-        record_length = len(record_text)
-        
-        # 制限を超えるかチェック
-        if total_length + record_length > max_length:
-            # 制限を超えた場合、現在のレコードを最大文字数まで表示
-            remaining_length = max_length - total_length
-            if remaining_length > 0:
-                partial_text = record_text[:remaining_length]
-                output.append(partial_text)
-            limit_reached = True
-            break
-            
-        output.extend(record_output)
-        total_length += record_length
+                record[header] = f"<表示エラー: {str(e)}>"
+        json_results.append(record)
     
-    # 結果を文字列として結合
-    result_text = "\n".join(output)
+    # 結果を文字列に変換
+    result_str = json.dumps(json_results, ensure_ascii=False, indent=2)
     
-    # 制限に達した場合のメッセージを追加
-    if limit_reached:
-        result_text += "\n... (文字数制限により以降は省略)"
+    # 文字数制限をチェック
+    if len(result_str) > max_length:
+        # 文字列を制限内に切り詰める
+        truncated_str = result_str[:max_length]
+        # 最後の完全なJSONオブジェクトを探し、それ以降を削除
+        last_bracket = truncated_str.rfind('}')
+        if last_bracket != -1:
+            truncated_str = truncated_str[:last_bracket + 1]
+        # 省略メッセージをJSON構造で追加
+        truncated_str = truncated_str + ',\n  {\n    "message": "(文字数制限により以降は省略)"\n  }\n]'
+        return truncated_str
     
-    # 表示件数と合計件数を追加
-    displayed_count = len(output) // (len(headers) * 3 + 2)  # 1レコードあたりの行数で割る
-    result_text += f"\n\n完全表示: {displayed_count}件 / 合計: {len(results)}件"
-    
-    return result_text
+    return result_str
 
 def execute_query(cursor, query, params=None, max_rows=None):
     """
@@ -203,7 +183,7 @@ def execute_query(cursor, query, params=None, max_rows=None):
                     break
         else:
             results = cursor.fetchall()
-            
+
         return results
     except oracledb.Error as e:
         raise ValueError(f"SQL実行エラー: {str(e)}")
@@ -247,7 +227,7 @@ def execute(query, params=None, max_length=1000, max_rows=10):
     クエリを実行し、結果を整形して表示する関数
     query: 実行するSQLクエリ
     params: バインド変数に使用するパラメータ（辞書型）
-    max_length: 各カラムの値の最大文字数（デフォルト: 1000）
+    max_length: 応答の最大文字数（デフォルト: 1000）
     max_rows: 取得する最大行数（デフォルト: 10）
     """
     try:
@@ -311,25 +291,10 @@ mcp = FastMCP("ORACLE")
     """)
 def execute_oracle(query: str, params: dict = None, max_length: int = 1000, max_rows: int = 10) -> str:
     try:
-        result = execute(query, params, max_length, max_rows)
-        # 結果をJSON形式で返す
-        response = {
-            "content": [
-                {"type": "text", "text": result}
-            ],
-            "is_error": False,
-            "encoding": "utf-8"
-        }
-        return json.dumps(response, ensure_ascii=False, indent=2)
+        results = execute(query, params, max_length, max_rows)
+        return [types.TextContent(type="text", text=str(results))]
     except Exception as e:
-        error_response = {
-            "content": [
-                {"type": "text", "text": str(e)}
-            ],
-            "is_error": True,
-            "encoding": "utf-8"
-        }
-        return json.dumps(error_response, ensure_ascii=False, indent=2)
+        return [types.TextContent(type="text", text=str(e))]
     
 @mcp.prompt()
 def oracle_query_assistant(query_type: str = "select") -> str:
@@ -501,6 +466,7 @@ def oracle_query_assistant(query_type: str = "select") -> str:
     )
     
     レスポンスが切り詰められた場合は、max_length値を整数で増やして再実行してください（例: max_length=5000）。
+    10行を超えるデータを取得したい場合は、max_rows値を整数で増やして再実行してください（例: max_rows=50）。
     """
 
 
@@ -580,17 +546,9 @@ def describe_table(table_name: str) -> str:
                 # 行を整形
                 output.append(f"{column_name.ljust(30)}\t{nullable_display}\t{type_display.ljust(20)}\t{data_length or ''}\t{comment}")
             
-            result = "\n".join(output)
+            results = "\n".join(output)
             
-            # 結果をJSON形式で返す
-            response = {
-                "content": [
-                    {"type": "text", "text": result}
-                ],
-                "is_error": False,
-                "encoding": "utf-8"
-            }
-            return json.dumps(response, ensure_ascii=False, indent=2)
+            return [types.TextContent(type="text", text=str(results))]
             
         finally:
             # リソースの解放
@@ -598,14 +556,7 @@ def describe_table(table_name: str) -> str:
             db_connection.close()
             
     except Exception as e:
-        error_response = {
-            "content": [
-                {"type": "text", "text": str(e)}
-            ],
-            "is_error": True,
-            "encoding": "utf-8"
-        }
-        return json.dumps(error_response, ensure_ascii=False, indent=2)
+        return [types.TextContent(type="text", text=str(e))]
 
 if __name__ == "__main__":
     # stdioで通信
