@@ -507,10 +507,11 @@ def oracle_query_assistant(query_type: str = "select") -> str:
     データベースのテーブルの構造を表示します。
         Args:
             table_name: テーブル名（必須）
+            owner: テーブルの所有者（オプション）
         ヒント:
             結果をマークダウンで表示する場合には、テーブル名に含まれる"$"記号などのエスケープを忘れないでください。
     """)
-def describe_table(table_name: str) -> str:
+def describe_table(table_name: str, owner: str = None) -> str:
     try:
         # テーブル名の検証
         if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table_name):
@@ -533,25 +534,35 @@ def describe_table(table_name: str) -> str:
                     ELSE NULL
                 END as data_length,
                 nullable
-            FROM user_tab_columns
+            FROM all_tab_columns
             WHERE table_name = :1
-            ORDER BY column_id
             """
+            if owner:
+                query += " AND owner = :2"
+                params = [table_name.upper(), owner.upper()]
+            else:
+                params = [table_name.upper()]
+            query += " ORDER BY column_id"
             
             # コメント情報を取得
             comment_query = """
             SELECT column_name, comments
-            FROM user_col_comments
+            FROM all_col_comments
             WHERE table_name = :1
             """
+            if owner:
+                comment_query += " AND owner = :2"
+                comment_params = [table_name.upper(), owner.upper()]
+            else:
+                comment_params = [table_name.upper()]
             
             # カラム情報を取得
-            columns, _ = execute_query(cursor, query, [table_name.upper()])
+            columns, _ = execute_query(cursor, query, params)
             if not columns:
                 raise ValueError(f"テーブル '{table_name}' が見つかりません")
             
             # コメント情報を取得
-            comments, _ = execute_query(cursor, comment_query, [table_name.upper()])
+            comments, _ = execute_query(cursor, comment_query, comment_params)
             comments_dict = {row[0]: row[1] for row in comments}
             
             # 結果を整形
