@@ -8,6 +8,10 @@ from mcp.server.fastmcp import FastMCP
 import mcp.types as types
 import json
 
+# デフォルト設定
+DEFAULT_MAX_LENGTH = 10000
+DEFAULT_MAX_ROWS = 100
+
 # セキュリティ設定
 MAX_QUERY_LENGTH = 1000000  # Oracle Database 23aiでは理論上は制限なしだが、パフォーマンスとセキュリティの観点から1MBに制限
 
@@ -109,12 +113,12 @@ def validate_query(query):
         if 'union' in token_value or 'into' in token_value:
             raise ValueError("許可されていない操作が含まれています")
 
-def format_results(cursor, results, max_length=1000, more_rows_exist=False):
+def format_results(cursor, results, max_length=DEFAULT_MAX_LENGTH, more_rows_exist=False):
     """
     検索結果を整形してJSON形式で返す関数
     cursor: データベースカーソル
     results: 検索結果
-    max_length: 出力テキスト全体の最大文字数（デフォルト: 1000）
+    max_length: 出力テキスト全体の最大文字数（デフォルト: DEFAULT_MAX_LENGTH）
     more_rows_exist: 取得可能な追加行があるかどうか
     """
     if not results:
@@ -238,13 +242,13 @@ def get_db_connection():
     
     return db_connection, cursor
 
-def execute(query, params=None, max_length=1000, max_rows=10):
+def execute(query, params=None, max_length=DEFAULT_MAX_LENGTH, max_rows=DEFAULT_MAX_ROWS):
     """
     クエリを実行し、結果を整形して表示する関数
     query: 実行するSQLクエリ
     params: バインド変数に使用するパラメータ（辞書型）
-    max_length: 応答の最大文字数（デフォルト: 1000）
-    max_rows: 取得する最大行数（デフォルト: 10）
+    max_length: 応答の最大文字数（デフォルト: DEFAULT_MAX_LENGTH）
+    max_rows: 取得する最大行数（デフォルト: DEFAULT_MAX_ROWS）
     """
     try:
         # データベース接続
@@ -295,19 +299,19 @@ mcp = FastMCP("ORACLE")
 
 @mcp.tool(
     name = "execute_oracle",
-    description = """
+    description = f"""
     Oracle Databaseに対してSQLクエリを実行し、結果をフォーマットして返す。
         Args:
             query: 実行するSQLクエリ（必須）
-            params: バインド変数に使用するパラメータ（辞書型　例：{"parameter1": 5}）
-            max_length: 応答の最大文字数（integer型、デフォルト: 1000）
-            max_rows: 取得する最大行数（integer型、デフォルト: 10）
+            params: バインド変数に使用するパラメータ（辞書型　例：{{"parameter1": 5}}）
+            max_length: 応答の最大文字数（integer型、デフォルト: {DEFAULT_MAX_LENGTH}）
+            max_rows: 取得する最大行数（integer型、デフォルト: {DEFAULT_MAX_ROWS}）
         ヒント:
             文字数制限にかかったときは、max_lengthを大きくしてください。
             行数制限にかかったときは、max_rowsを大きくしてください。
             結果をマークダウンで表示する場合には、テーブル名に含まれる$記号記号が特殊文字として扱われるため、バックスラッシュでエスケープすることを忘れないでください。
     """)
-def execute_oracle(query: str, params: dict = None, max_length: int = 1000, max_rows: int = 10) -> str:
+def execute_oracle(query: str, params: dict = None, max_length: int = DEFAULT_MAX_LENGTH, max_rows: int = DEFAULT_MAX_ROWS) -> str:
     try:
         results = execute(query, params, max_length, max_rows)
         return [types.TextContent(type="text", text=str(results))]
@@ -384,12 +388,12 @@ def oracle_query_assistant(query_type: str = "select") -> str:
        誤った例: params="emp_id: 101" (文字列になっている)
     
     3. max_length: 整数型 (int)
-       正しい例: max_length: 2000
-       誤った例: max_length: "2000" (文字列になっている)
+       正しい例: max_length: 20000
+       誤った例: max_length: "20000" (文字列になっている)
     
     4. max_rows: 整数型 (int)
-       正しい例: max_rows: 50
-       誤った例: max_rows: "50" (文字列になっている)
+       正しい例: max_rows: 200
+       誤った例: max_rows: "200" (文字列になっている)
     
     特に max_length と max_rows は必ず整数型として指定してください。
     文字列型（引用符付き）で渡すとエラーの原因となります。
@@ -414,29 +418,25 @@ def oracle_query_assistant(query_type: str = "select") -> str:
     例1: 基本的な呼び出し
         query: "SELECT * FROM employees WHERE department_id = 50"
         params: None
-        max_rows: 20
-        max_length: 2000
+        max_rows: 200
+        max_length: 20000
     
     例2: バインド変数を使用
         query: "SELECT * FROM employees WHERE department_id = :dept_id"
         params: {"dept_id": 50}
-        max_rows: 30
-        max_length: 3000
+        max_rows: 300
+        max_length: 30000
     注意: max_lengthとmax_rowsを指定する場合は、必ず整数値（引用符なし）を使用してください。
     
     例3: max_lengthとmax_rowsを省略（デフォルト値を使用）
         query: "SELECT first_name, last_name FROM employees"
         params: None
-        max_rows: 10
-        max_length: 1000
-    
-    注意: max_lengthとmax_rowsを指定する場合は、必ず整数値（引用符なし）を使用してください。
 
     例4: 結果セットの先頭から指定した行数をスキップして継続行を取得する
         query: "SELECT first_name, last_name FROM employees ORDER BY employee_id OFFSET 10 ROWS FETCH NEXT 20 ROWS ONLY"
         params: None
-        max_rows: 20
-        max_length: 2000    
+        max_rows: 200
+        max_length: 20000    
     注意: max_lengthとmax_rowsを指定する場合は、必ず整数値（引用符なし）を使用してください。
     """
     
@@ -479,24 +479,24 @@ def oracle_query_assistant(query_type: str = "select") -> str:
     
     
     # 重要なヒント
-    ## 10行を超えるデータを取得する場合は、max_rows 値を整数で増やして実行してください
-    ### max_rows を増やす例
-    - "max_rows": 50
-    ## 取得できたデータ件数が想定より少ない場合は、max_rows 値を整数で増やして再実行してください
-    ### max_rows を増やす例
-    - "max_rows": 100
-    ## 行数制限メッセージが表示された場合は、max_rows 値を整数で増やして再実行してください
+    ## {DEFAULT_MAX_ROWS}行を超えるデータを取得する場合は、max_rows 値を整数で増やして実行してください
     ### max_rows を増やす例
     - "max_rows": 200
+    ## 取得できたデータ件数が想定より少ない場合は、max_rows 値を整数で増やして再実行してください
+    ### max_rows を増やす例
+    - "max_rows": 300
+    ## 行数制限メッセージが表示された場合は、max_rows 値を整数で増やして再実行してください
+    ### max_rows を増やす例
+    - "max_rows": 400
     ## LOB型のカラムがある場合は max_length 値を整数で増やして全文の取得を試みてください
     ### max_length を増やす例
-    - "max_length": 2000
+    - "max_length": 20000
     ## SUBSTR関数を使う前に必ず max_length 値を整数で増やすことを試してください。
     ### max_length を増やす例
-    - "max_length": 5000
+    - "max_length": 30000
     ## 文字数制限メッセージが表示された場合は、max_length 値を整数で増やして再実行してください
     ### max_length を増やす例
-    - "max_length": 10000
+    - "max_length": 30000
     ## 結果をマークダウンで表示する場合には、テーブル名に含まれる$記号記号が特殊文字として扱われるため、バックスラッシュでエスケープすることを忘れないでください。
     """
 
@@ -593,18 +593,20 @@ def describe_table(table_name: str) -> str:
 
 @mcp.tool(
     name = "list_tables",
-    description = """
+    description = f"""
     データベース内のテーブル一覧を表示します。
         Args:
-            max_rows: 取得する最大テーブル数（integer型、デフォルト: 50）
+            max_rows: 取得する最大テーブル数（integer型、デフォルト: {DEFAULT_MAX_ROWS}）
             name_pattern: テーブル名のパターン（例: '%EMP%'）（オプション）
             order_by: 並び順（'TABLE_NAME'または'CREATED'、デフォルト: 'TABLE_NAME'）
             include_system_tables: システムテーブルを含めるかどうか（デフォルト: False）
+            use_all_tables: ALL_TABLESを参照するかどうか（デフォルト: False）
+            owner: テーブルの所有者（use_all_tablesがTrueの場合は必須）
         ヒント:
             特定のパターンに一致するテーブルのみを表示するには name_pattern を使用してください。
             テーブル名は基本的に大文字で格納されているため、パターンも大文字で指定すると良いでしょう。
     """)
-def list_tables(max_rows: int = 50, name_pattern: str = None, order_by: str = 'TABLE_NAME', include_system_tables: bool = False) -> str:
+def list_tables(max_rows: int = DEFAULT_MAX_ROWS, name_pattern: str = None, order_by: str = 'TABLE_NAME', include_system_tables: bool = False, use_all_tables: bool = False, owner: str = None) -> str:
     try:
         # データベース接続
         db_connection, cursor = get_db_connection()
@@ -617,8 +619,15 @@ def list_tables(max_rows: int = 50, name_pattern: str = None, order_by: str = 'T
             # システムテーブルを除外する条件
             system_table_condition = "AND t.table_name NOT LIKE '%$%'" if not include_system_tables else ""
             
+            # ALL_TABLESを使用する場合、OWNERの指定を必須にする
+            if use_all_tables and not owner:
+                raise ValueError("ALL_TABLESを使用する場合、OWNERを指定する必要があります。")
+            
+            # テーブルソースを選択
+            table_source = 'ALL_TABLES' if use_all_tables else 'USER_TABLES'
+            
             # テーブル一覧を取得
-            if name_pattern:
+            if use_all_tables:
                 query = f"""
                 SELECT 
                     t.table_name,
@@ -626,12 +635,16 @@ def list_tables(max_rows: int = 50, name_pattern: str = None, order_by: str = 'T
                     TO_CHAR(t.last_analyzed, 'YYYY-MM-DD HH24:MI:SS') as last_analyzed,
                     TO_CHAR(t.num_rows) as num_rows,
                     TO_CHAR(o.created, 'YYYY-MM-DD HH24:MI:SS') as created_date
-                FROM user_tables t
-                JOIN user_objects o ON t.table_name = o.object_name AND o.object_type = 'TABLE'
-                WHERE t.table_name LIKE :1 {system_table_condition}
-                ORDER BY {order_by}
+                FROM {table_source} t
+                JOIN all_objects o ON t.table_name = o.object_name AND o.object_type = 'TABLE'
+                WHERE t.owner = :2 {system_table_condition}
                 """
-                params = [name_pattern.upper()]
+                if name_pattern:
+                    query += " AND t.table_name LIKE :1"
+                    params = [name_pattern.upper(), owner.upper() if owner else None]
+                else:
+                    params = [owner.upper() if owner else None]
+                query += f" ORDER BY {order_by}"
             else:
                 query = f"""
                 SELECT 
@@ -640,12 +653,16 @@ def list_tables(max_rows: int = 50, name_pattern: str = None, order_by: str = 'T
                     TO_CHAR(t.last_analyzed, 'YYYY-MM-DD HH24:MI:SS') as last_analyzed,
                     TO_CHAR(t.num_rows) as num_rows,
                     TO_CHAR(o.created, 'YYYY-MM-DD HH24:MI:SS') as created_date
-                FROM user_tables t
-                JOIN user_objects o ON t.table_name = o.object_name AND o.object_type = 'TABLE'
+                FROM {table_source} t
+                JOIN all_objects o ON t.table_name = o.object_name AND o.object_type = 'TABLE'
                 WHERE 1=1 {system_table_condition}
-                ORDER BY {order_by}
                 """
-                params = None
+                if name_pattern:
+                    query += " AND t.table_name LIKE :1"
+                    params = [name_pattern.upper()]
+                else:
+                    params = None
+                query += f" ORDER BY {order_by}"
                 
             # テーブル一覧を取得
             results, more_rows_exist = execute_query(cursor, query, params, max_rows)
