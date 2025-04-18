@@ -104,14 +104,85 @@ def validate_query(query):
     if stmt.get_type() != 'SELECT':
         raise ValueError("SELECT文以外のクエリは実行できません")
     
-    # 危険なトークンをチェック
-    for token in stmt.tokens:
-        token_type = str(token.ttype).lower() if token.ttype else ''
+    # トークンを解析してUNIONとINTOをチェック
+    for i, token in enumerate(stmt.tokens):
         token_value = str(token.value).lower()
         
-        # UNIONやその他の危険な操作をチェック
-        if 'union' in token_value or 'into' in token_value:
-            raise ValueError("許可されていない操作が含まれています")
+        # INTO句の使用を禁止
+        if 'into' in token_value:
+            raise ValueError("INTO句の使用は許可されていません")
+        
+        # UNIONの検出とガイダンス
+        if 'union' in token_value:
+            # UNION ALLの場合は特別なガイダンスを提供
+            if 'union all' in token_value:
+                guidance_message = """
+UNION ALLの使用は許可されていません。
+
+代替案として以下の方法を検討してください：
+
+1. ROLLUPを使用した集計:
+   GROUP BY ROLLUP(列名)
+   - 小計や総計を自動的に生成できます
+   - パフォーマンスが向上する可能性があります
+
+2. GROUPING関数との組み合わせ:
+   NVL2(GROUPING(列名), '総計', 列名) AS 列名
+   - 集計レベルを識別できます
+   - より柔軟な集計表示が可能です
+
+例：
+WITH 基本集計 AS (
+    SELECT 
+        カテゴリー,
+        年度,
+        SUM(売上高) AS 売上高
+    FROM 
+        売上テーブル
+    GROUP BY 
+        カテゴリー,
+        年度
+)
+SELECT 
+    NVL2(GROUPING(カテゴリー), '総計', カテゴリー) AS カテゴリー,
+    SUM(CASE WHEN 年度 = '2023' THEN 売上高 ELSE 0 END) AS "2023年",
+    SUM(CASE WHEN 年度 = '2024' THEN 売上高 ELSE 0 END) AS "2024年",
+    SUM(売上高) AS 合計,
+    CASE 
+        WHEN GROUPING(カテゴリー) = 1 THEN 2
+        ELSE 1
+    END AS ソート順
+FROM 
+    基本集計
+GROUP BY ROLLUP(カテゴリー)
+ORDER BY 
+    ソート順,
+    カテゴリー;
+
+なお、ORDER BY句では集計関数（SUM、COUNT、AVG等）を直接使用することはできません。副問合せやCASE式の使用を検討してください。
+
+この方法により：
+- UNION ALL による セキュリティ上の脆弱性を回避
+- より効率的なクエリ実行
+- メンテナンス性の向上
+- 標準的なSQL機能の活用
+が期待できます。
+"""
+                raise ValueError(guidance_message)
+            
+            # UNIONの後のトークンを検索
+            select_found = False
+            for next_token in stmt.tokens[i+1:]:
+                next_value = str(next_token.value).lower().strip()
+                if next_value == 'select':
+                    select_found = True
+                    break
+                # 意味のある文字列トークンがSELECT以外で見つかった場合
+                elif next_value and not next_value.isspace():
+                    raise ValueError("UNIONの後にはSELECT文が必要です")
+            
+            if not select_found:
+                raise ValueError("UNIONの後にはSELECT文が必要です")
 
 def format_results(cursor, results, max_length=DEFAULT_MAX_LENGTH, more_rows_exist=False):
     """
@@ -479,6 +550,12 @@ def oracle_query_assistant(query_type: str = "select") -> str:
     
     
     # 重要なヒント
+    ## UNIONとUNION ALLについて
+    - UNION句は使用可能です
+    - UNION ALL句は使用できません（セキュリティ上の理由により制限）
+    ## ORDER BY句の制限
+    - ORDER BY句では集計関数（SUM、COUNT、AVG等）を直接使用することはできません
+    - 代わりに、副問合せやCASE式を使用してください
     ## {DEFAULT_MAX_ROWS}行を超えるデータを取得する場合は、max_rows 値を整数で増やして実行してください
     ### max_rows を増やす例
     - "max_rows": 200
@@ -614,6 +691,7 @@ def describe_table(table_name: str, owner: str = None) -> str:
             use_all_tables: ALL_TABLESを参照するかどうか（デフォルト: False）
             owner: テーブルの所有者（use_all_tablesがTrueの場合は必須）
         ヒント:
+            所有者を指定する場合は use_all_tables を True にして、owner を指定してください。
             特定のパターンに一致するテーブルのみを表示するには name_pattern を使用してください。
             テーブル名は基本的に大文字で格納されているため、パターンも大文字で指定すると良いでしょう。
     """)
