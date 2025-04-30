@@ -64,10 +64,26 @@ SQLクエリ（SELECT文のみ）を実行し、結果をフォーマットし�
   ※LLMがパラメータの使い方を試行錯誤することが多いようです。クライアントへパラメータの使い方を上手く伝える方法があったら教えてください。
   ※読むのは LLM なのでフォーマットは余計かもしれません。
 
+### list_tables
+データベースのテーブル一覧を表示します。
+- パラメータ:
+  - max_rows: 取得する最大テーブル数（integer型、デフォルト: 50）
+  - name_pattern: テーブル名のパターン（例: '%EMP%'）（オプション）
+  - order_by: 並び順（'TABLE_NAME'または'CREATED'、デフォルト: 'TABLE_NAME'）
+  - include_system_tables: システムテーブルを含めるかどうか（デフォルト: False）
+  - use_all_tables: ALL_TABLESを参照するかどうか（デフォルト: False）
+  - owner: テーブルの所有者（use_all_tablesがTrueの場合は必須）
+
 ### describe_table
 テーブルの構造を表示します。sqlplus の describe を模しています。
 - パラメータ:
   - table_name: テーブル名
+
+### oracle_query_assistant
+execute_oracle（Oracle Databaseへのクエリ実行）をガイドするプロンプトを返します。
+
+- パラメータ
+  - query_type: SQL のタイプ（現在は、"select"のみ）
 
 ## 使用方法
 
@@ -111,7 +127,8 @@ xxxx テーブルのデータを取得して
 
 ## セキュリティ
 
-- SELECT 文以外は受け付けません
+- SELECT 文以外は受け付けません（DDL/DMLは実行できません）
+  - SELECT INTO と UNION ALL も受け付けません
 - クエリ長の制限（デフォルト: 1MB）
 - 危険なキーワードのチェック
 - 入力値のサニタイズ

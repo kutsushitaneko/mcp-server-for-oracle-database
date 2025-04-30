@@ -1,3 +1,6 @@
 .venv/
 .env
-code-workspace
+.cursor/
+prompts/
+output/
+*.code-workspace
