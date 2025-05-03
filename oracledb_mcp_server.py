@@ -144,12 +144,12 @@ def validate_query(query):
     """
     SQLクエリを検証する関数
     """
-    # DBMS_CLOUD_AI関連のPL/SQLブロックの場合は許可
-    if re.search(r'^\s*BEGIN\s+DBMS_CLOUD_AI\.(GENERATE|GET_PROFILE|SET_PROFILE|CREATE_VECTOR_INDEX|CREATE_PROFILE)', query, re.IGNORECASE):
+    # SELECT AIで始まるクエリの場合は検証をスキップ
+    if re.search(r'^\s*SELECT\s+AI\s+', query, re.IGNORECASE):
         return
         
-    # SELECT AIで始まるクエリの場合は許可（Oracle Database AI機能）
-    if re.search(r'^\s*SELECT\s+AI\s+', query, re.IGNORECASE):
+    # DBMS_CLOUD_AI関連のPL/SQLブロックの場合は許可
+    if re.search(r'^\s*BEGIN\s+DBMS_CLOUD_AI\.(GENERATE|GET_PROFILE|SET_PROFILE|CREATE_VECTOR_INDEX|CREATE_PROFILE)', query, re.IGNORECASE):
         return
         
     # SQLクエリをパース
@@ -311,18 +311,7 @@ def execute_query(cursor, query, params=None, max_rows=None):
     # クエリの末尾のセミコロンを削除
     query = query.strip().rstrip(';')
     
-    # DBMS_CLOUD_AI関連のPL/SQLブロックの場合は特別処理
-    if re.search(r'^\s*BEGIN\s+DBMS_CLOUD_AI\.(GENERATE|GET_PROFILE|SET_PROFILE|CREATE_VECTOR_INDEX|CREATE_PROFILE)', query, re.IGNORECASE):
-        try:
-            cursor.execute(query)
-            db_connection.commit()  # トランザクションをコミット
-            # PL/SQLブロックは結果セットを返さないため、成功メッセージを返す
-            return [("PL/SQLプロシージャが正常に完了しました。",)], False
-        except oracledb.Error as e:
-            db_connection.rollback()  # エラー時はロールバック
-            raise ValueError(f"PL/SQL実行エラー: {str(e)}")
-    
-    # SELECT AIクエリの場合は特別処理
+    # SELECT AIクエリの場合は直接実行
     if re.search(r'^\s*SELECT\s+AI\s+', query, re.IGNORECASE):
         try:
             cursor.execute(query)
@@ -338,6 +327,17 @@ def execute_query(cursor, query, params=None, max_rows=None):
                 return results, False
         except oracledb.Error as e:
             raise ValueError(f"Oracle AI実行エラー: {str(e)}")
+    
+    # DBMS_CLOUD_AI関連のPL/SQLブロックの場合は特別処理
+    if re.search(r'^\s*BEGIN\s+DBMS_CLOUD_AI\.(GENERATE|GET_PROFILE|SET_PROFILE|CREATE_VECTOR_INDEX|CREATE_PROFILE)', query, re.IGNORECASE):
+        try:
+            cursor.execute(query)
+            db_connection.commit()  # トランザクションをコミット
+            # PL/SQLブロックは結果セットを返さないため、成功メッセージを返す
+            return [("PL/SQLプロシージャが正常に完了しました。",)], False
+        except oracledb.Error as e:
+            db_connection.rollback()  # エラー時はロールバック
+            raise ValueError(f"PL/SQL実行エラー: {str(e)}")
     
     # クエリの検証
     validate_query(query)
