@@ -3,4 +3,5 @@
 .cursor/
 prompts/
 output/
+old/
 *.code-workspace

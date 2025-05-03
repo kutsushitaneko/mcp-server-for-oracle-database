@@ -389,195 +389,6 @@ def execute_oracle(query: str, params: dict = None, max_length: int = DEFAULT_MA
     except Exception as e:
         return [types.TextContent(type="text", text=str(e))]
     
-@mcp.prompt()
-def oracle_query_assistant(query_type: str = "select") -> str:
-    """
-    Oracle Databaseに対するクエリを実行する execute_oracle ツールの使い方ガイド
-    
-    引数:
-        query_type: 実行するSQLの種類（現在は'select'のみサポート）
-    """
-    
-    # 注意：現在サポートされているのはSELECTクエリのみ
-    support_notice = """
-    重要: 現在このツールではSELECTクエリのみがサポートされています。
-    INSERT、UPDATE、DELETEなどのデータ変更操作は実行できません。
-    """
-    
-    # クエリタイプ別のテンプレートとヒント
-    query_templates = {
-        "select": {
-            "template": "SELECT [列名] FROM [テーブル名] WHERE [条件]",
-            "example": "SELECT employee_id, first_name, last_name FROM employees WHERE department_id = :dept_id",
-            "params_example": {"dept_id": 10}
-        }
-    }
-    
-    # 選択されたクエリタイプの情報を取得（現在はselectのみ）
-    query_info = query_templates.get("select")
-    
-    # バインド変数の使用方法ガイド
-    bind_variable_guide = """
-    バインド変数の正しい使用方法:
-    
-    1. Oracleのバインド変数には ':変数名' の形式を使用します（例: :employee_id）
-    2. paramsパラメータには対応するJSONオブジェクトを渡します
-       正しい例: {"employee_id": 101, "department_id": 90}
-    3. 数値は数値型（整数や小数）、文字列は引用符付きで指定
-    4. 日付は 'YYYY-MM-DD' 形式の文字列で指定（例: '2023-04-15'）
-    """
-    
-    # パラメータバリデーションのヒント
-    validation_tips = """
-    一般的なエラーと解決策:
-    
-    1. ORA-00942: テーブルまたはビューが存在しません
-       → テーブル名のスペル、大文字小文字、スキーマ名を確認
-    
-    2. ORA-00904: 無効な列名
-       → 列名のスペルと大文字小文字を確認
-    
-    3. ORA-01722: 数値が無効です
-       → 数値型の列に文字列を渡していないか確認
-    
-    4. バインド変数エラー
-       → クエリ内の ':変数名' とparamsオブジェクトのキーが一致するか確認
-    """
-    
-    # パラメータのデータ型に関する明示的なガイド
-    parameter_type_guide = """
-    重要: パラメータのデータ型
-    
-    execute_oracleツールのパラメータには、以下のデータ型を正確に使用してください:
-    
-    1. query: 文字列型 (str)
-       正しい例: query="SELECT * FROM employees"
-       誤った例: query=SELECT * FROM employees (引用符がない)
-    
-    2. params: 辞書型 (dict) または None
-       正しい例: params={"emp_id": 101}
-       誤った例: params="emp_id: 101" (文字列になっている)
-    
-    3. max_length: 整数型 (int)
-       正しい例: max_length: 20000
-       誤った例: max_length: "20000" (文字列になっている)
-    
-    4. max_rows: 整数型 (int)
-       正しい例: max_rows: 200
-       誤った例: max_rows: "200" (文字列になっている)
-    
-    特に max_length と max_rows は必ず整数型として指定してください。
-    文字列型（引用符付き）で渡すとエラーの原因となります。
-    """
-    
-    # データ型の検証ステップ
-    type_validation_steps = """
-    パラメータのデータ型検証:
-    
-    ✓ queryは引用符で囲まれた文字列か?
-    ✓ paramsは波括弧{}で囲まれた辞書オブジェクトか?
-    ✓ max_lengthは引用符なしの整数値か?
-    ✓ max_rowsは引用符なしの整数値か?
-    
-    これらのデータ型の指定に問題があるとAPIエラーが発生します。
-    """
-    
-    # 実際の呼び出し例をより明確に
-    correct_call_examples = """
-    正しい呼び出し例:
-    
-    例1: 基本的な呼び出し
-        query: "SELECT * FROM employees WHERE department_id = 50"
-        params: None
-        max_rows: 200
-        max_length: 20000
-    
-    例2: バインド変数を使用
-        query: "SELECT * FROM employees WHERE department_id = :dept_id"
-        params: {"dept_id": 50}
-        max_rows: 300
-        max_length: 30000
-    注意: max_lengthとmax_rowsを指定する場合は、必ず整数値（引用符なし）を使用してください。
-    
-    例3: max_lengthとmax_rowsを省略（デフォルト値を使用）
-        query: "SELECT first_name, last_name FROM employees"
-        params: None
-
-    例4: 結果セットの先頭から指定した行数をスキップして継続行を取得する
-        query: "SELECT first_name, last_name FROM employees ORDER BY employee_id OFFSET 10 ROWS FETCH NEXT 20 ROWS ONLY"
-        params: None
-        max_rows: 200
-        max_length: 20000    
-    注意: max_lengthとmax_rowsを指定する場合は、必ず整数値（引用符なし）を使用してください。
-    """
-    
-    return f"""
-    Oracle Databaseに対してSELECTクエリを実行します。
-    
-    {support_notice}
-    
-    {parameter_type_guide}
-    
-    クエリテンプレート:
-    ```sql
-    {query_info["template"]}
-    ```
-    
-    具体例:
-    ```sql
-    {query_info["example"]}
-    ```
-    
-    パラメータ例:
-    ```json
-    {json.dumps(query_info["params_example"], ensure_ascii=False, indent=2)}
-    ```
-    
-    {bind_variable_guide}
-    
-    {validation_tips}
-    
-    {type_validation_steps}
-    
-    {correct_call_examples}
-    
-    ステップ1: ユーザーの意図を理解して、検索する必要があるテーブルをexecute_oracleツールでデータベースにアクセスして特定してください。予想でテーブル名や構造を決め打ちしないでください。
-    ステップ2: テーブルの構造をdescribe_tableツールで確認してください。
-    ステップ3: 適切なSELECTクエリを構築してください。
-    ステップ4: 必要なバインド変数を特定し、正しい形式のparamsオブジェクトを作成してください。
-    ステップ5: クエリとパラメータを検証し、特にデータ型が正しいか確認してください。
-    ステップ6: 検証後、正しいデータ型を使用してexecute_oracleツールを呼び出してください。
-    
-    
-    # 重要なヒント
-    ## UNIONとUNION ALLについて
-    - UNION句は使用可能です
-    - UNION ALL句は使用できません（セキュリティ上の理由により制限）
-    ## ORDER BY句の制限
-    - ORDER BY句では集計関数（SUM、COUNT、AVG等）を直接使用することはできません
-    - 代わりに、副問合せやCASE式を使用してください
-    ## {DEFAULT_MAX_ROWS}行を超えるデータを取得する場合は、max_rows 値を整数で増やして実行してください
-    ### max_rows を増やす例
-    - "max_rows": 200
-    ## 取得できたデータ件数が想定より少ない場合は、max_rows 値を整数で増やして再実行してください
-    ### max_rows を増やす例
-    - "max_rows": 300
-    ## 行数制限メッセージが表示された場合は、max_rows 値を整数で増やして再実行してください
-    ### max_rows を増やす例
-    - "max_rows": 400
-    ## LOB型のカラムがある場合は max_length 値を整数で増やして全文の取得を試みてください
-    ### max_length を増やす例
-    - "max_length": 20000
-    ## SUBSTR関数を使う前に必ず max_length 値を整数で増やすことを試してください。
-    ### max_length を増やす例
-    - "max_length": 30000
-    ## 文字数制限メッセージが表示された場合は、max_length 値を整数で増やして再実行してください
-    ### max_length を増やす例
-    - "max_length": 30000
-    ## 結果をマークダウンで表示する場合には、テーブル名に含まれる$記号記号が特殊文字として扱われるため、バックスラッシュでエスケープすることを忘れないでください。
-    """
-
-
 @mcp.tool(
     name = "describe_table",
     description = """
@@ -589,10 +400,29 @@ def oracle_query_assistant(query_type: str = "select") -> str:
             結果をマークダウンで表示する場合には、テーブル名に含まれる"$"記号などのエスケープを忘れないでください。
     """)
 def describe_table(table_name: str, owner: str = None) -> str:
+    def sanitize_table_name(table_name: str) -> str:
+        # 空文字やNoneのチェック
+        if not table_name or not isinstance(table_name, str):
+            raise ValueError("テーブル名は必須で、文字列である必要があります")
+            
+        # 長さチェック（Oracleの制限は30バイト）
+        if len(table_name) > 30:
+            raise ValueError("テーブル名は30文字以内である必要があります")
+            
+        # 明らかに危険な文字のチェック
+        dangerous_chars = [';', '--', '/*', '*/', "'", '"', '\x00']
+        for char in dangerous_chars:
+            if char in table_name:
+                raise ValueError(f"テーブル名に不正な文字が含まれています: {char}")
+                
+        return table_name
     try:
-        # テーブル名の検証
-        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table_name):
-            raise ValueError(f"無効なテーブル名: {table_name}")
+        # 基本的なサニタイゼーション
+        table_name = sanitize_table_name(table_name)
+        
+        # ownerのサニタイゼーション（指定された場合）
+        if owner:
+            owner = sanitize_table_name(owner)
         
         # データベース接続
         db_connection, cursor = get_db_connection()
@@ -687,7 +517,7 @@ def describe_table(table_name: str, owner: str = None) -> str:
             max_rows: 取得する最大テーブル数（integer型、デフォルト: {DEFAULT_MAX_ROWS}）
             name_pattern: テーブル名のパターン（例: '%EMP%'）（オプション）
             order_by: 並び順（'TABLE_NAME'または'CREATED'、デフォルト: 'TABLE_NAME'）
-            include_system_tables: システムテーブルを含めるかどうか（デフォルト: False）
+            include_internal_tables: 内部テーブル（名前に$記号が含まれるテーブル）を含めるかどうか（デフォルト: False）
             use_all_tables: ALL_TABLESを参照するかどうか（デフォルト: False）
             owner: テーブルの所有者（use_all_tablesがTrueの場合は必須）
         ヒント:
@@ -695,7 +525,7 @@ def describe_table(table_name: str, owner: str = None) -> str:
             特定のパターンに一致するテーブルのみを表示するには name_pattern を使用してください。
             テーブル名は基本的に大文字で格納されているため、パターンも大文字で指定すると良いでしょう。
     """)
-def list_tables(max_rows: int = DEFAULT_MAX_ROWS, name_pattern: str = None, order_by: str = 'TABLE_NAME', include_system_tables: bool = False, use_all_tables: bool = False, owner: str = None) -> str:
+def list_tables(max_rows: int = DEFAULT_MAX_ROWS, name_pattern: str = None, order_by: str = 'TABLE_NAME', include_internal_tables: bool = False, use_all_tables: bool = False, owner: str = None) -> str:
     try:
         # データベース接続
         db_connection, cursor = get_db_connection()
@@ -705,8 +535,8 @@ def list_tables(max_rows: int = DEFAULT_MAX_ROWS, name_pattern: str = None, orde
             if order_by not in ['TABLE_NAME', 'CREATED']:
                 order_by = 'TABLE_NAME'  # デフォルトに戻す
                 
-            # システムテーブルを除外する条件
-            system_table_condition = "AND t.table_name NOT LIKE '%$%'" if not include_system_tables else ""
+            # 内部テーブルを除外する条件
+            internal_table_condition = "AND t.table_name NOT LIKE '%$%'" if not include_internal_tables else ""
             
             # ALL_TABLESを使用する場合、OWNERの指定を必須にする
             if use_all_tables and not owner:
@@ -726,7 +556,7 @@ def list_tables(max_rows: int = DEFAULT_MAX_ROWS, name_pattern: str = None, orde
                     TO_CHAR(o.created, 'YYYY-MM-DD HH24:MI:SS') as created_date
                 FROM {table_source} t
                 JOIN all_objects o ON t.table_name = o.object_name AND o.object_type = 'TABLE'
-                WHERE t.owner = :2 {system_table_condition}
+                WHERE t.owner = :2 {internal_table_condition}
                 """
                 if name_pattern:
                     query += " AND t.table_name LIKE :1"
@@ -744,7 +574,7 @@ def list_tables(max_rows: int = DEFAULT_MAX_ROWS, name_pattern: str = None, orde
                     TO_CHAR(o.created, 'YYYY-MM-DD HH24:MI:SS') as created_date
                 FROM {table_source} t
                 JOIN all_objects o ON t.table_name = o.object_name AND o.object_type = 'TABLE'
-                WHERE 1=1 {system_table_condition}
+                WHERE 1=1 {internal_table_condition}
                 """
                 if name_pattern:
                     query += " AND t.table_name LIKE :1"
@@ -784,6 +614,8 @@ def list_tables(max_rows: int = DEFAULT_MAX_ROWS, name_pattern: str = None, orde
             
     except Exception as e:
         return [types.TextContent(type="text", text=str(e))]
+
+
 
 if __name__ == "__main__":
     # stdioで通信
