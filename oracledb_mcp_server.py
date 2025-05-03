@@ -7,6 +7,7 @@ import time
 from mcp.server.fastmcp import FastMCP
 import mcp.types as types
 import json
+import atexit
 
 # デフォルト設定
 DEFAULT_MAX_LENGTH = 10000
@@ -22,6 +23,57 @@ DANGEROUS_KEYWORDS = [
     'execute', 'commit', 'rollback', 'savepoint'
 ]
 
+# グローバル変数としてデータベース接続を保持
+db_connection = None
+cursor = None
+
+def initialize_db_connection():
+    """
+    データベース接続を初期化する関数
+    """
+    global db_connection, cursor
+    
+    # 環境変数を読み込む
+    load_dotenv(find_dotenv())
+    
+    # 必要な環境変数のリスト
+    required_env_vars = [
+        "DB_USER",
+        "DB_PASSWORD",
+        "DB_DSN"
+    ]
+    
+    # 環境変数の存在確認
+    missing_vars = []
+    for var in required_env_vars:
+        if not os.getenv(var):
+            missing_vars.append(var)
+    
+    if missing_vars:
+        raise ValueError(f"以下の環境変数が設定されていません: {', '.join(missing_vars)}")
+    
+    # 環境変数から設定を読み込む
+    USERNAME = os.getenv("DB_USER")
+    PASSWORD = os.getenv("DB_PASSWORD")
+    DSN = os.getenv("DB_DSN")
+
+    # データベース接続
+    db_connection = oracledb.connect(user=USERNAME, password=PASSWORD, dsn=DSN)
+    cursor = db_connection.cursor()
+
+def cleanup_db_connection():
+    """
+    データベース接続をクリーンアップする関数
+    """
+    global db_connection, cursor
+    if cursor:
+        cursor.close()
+    if db_connection:
+        db_connection.close()
+
+# プログラム終了時にクリーンアップを実行
+atexit.register(cleanup_db_connection)
+
 def validate_query_length(query):
     """
     クエリの長さを検証する関数
@@ -33,6 +85,10 @@ def check_dangerous_keywords(query):
     """
     危険なキーワードが含まれていないかチェックする関数
     """
+    # SELECT AIで始まるクエリは許可
+    if re.search(r'^\s*SELECT\s+AI\s+', query, re.IGNORECASE):
+        return
+        
     # コメントを削除
     query = re.sub(r'--.*$', '', query, flags=re.MULTILINE)
     query = re.sub(r'/\*.*?\*/', '', query, flags=re.DOTALL)
@@ -88,6 +144,14 @@ def validate_query(query):
     """
     SQLクエリを検証する関数
     """
+    # DBMS_CLOUD_AI関連のPL/SQLブロックの場合は許可
+    if re.search(r'^\s*BEGIN\s+DBMS_CLOUD_AI\.(GENERATE|GET_PROFILE|SET_PROFILE|CREATE_VECTOR_INDEX|CREATE_PROFILE)', query, re.IGNORECASE):
+        return
+        
+    # SELECT AIで始まるクエリの場合は許可（Oracle Database AI機能）
+    if re.search(r'^\s*SELECT\s+AI\s+', query, re.IGNORECASE):
+        return
+        
     # SQLクエリをパース
     parsed = sqlparse.parse(query)
     if not parsed:
@@ -242,6 +306,39 @@ def execute_query(cursor, query, params=None, max_rows=None):
     params: バインド変数に使用するパラメータ（辞書型）
     max_rows: 取得する最大行数
     """
+    global db_connection  # グローバル変数を参照
+    
+    # クエリの末尾のセミコロンを削除
+    query = query.strip().rstrip(';')
+    
+    # DBMS_CLOUD_AI関連のPL/SQLブロックの場合は特別処理
+    if re.search(r'^\s*BEGIN\s+DBMS_CLOUD_AI\.(GENERATE|GET_PROFILE|SET_PROFILE|CREATE_VECTOR_INDEX|CREATE_PROFILE)', query, re.IGNORECASE):
+        try:
+            cursor.execute(query)
+            db_connection.commit()  # トランザクションをコミット
+            # PL/SQLブロックは結果セットを返さないため、成功メッセージを返す
+            return [("PL/SQLプロシージャが正常に完了しました。",)], False
+        except oracledb.Error as e:
+            db_connection.rollback()  # エラー時はロールバック
+            raise ValueError(f"PL/SQL実行エラー: {str(e)}")
+    
+    # SELECT AIクエリの場合は特別処理
+    if re.search(r'^\s*SELECT\s+AI\s+', query, re.IGNORECASE):
+        try:
+            cursor.execute(query)
+            # 結果をそのまま返す
+            if max_rows is not None:
+                cursor.arraysize = min(max_rows, 100)
+                results = cursor.fetchmany(max_rows)
+                check_more = cursor.fetchone()
+                more_rows_exist = check_more is not None
+                return results, more_rows_exist
+            else:
+                results = cursor.fetchall()
+                return results, False
+        except oracledb.Error as e:
+            raise ValueError(f"Oracle AI実行エラー: {str(e)}")
+    
     # クエリの検証
     validate_query(query)
     
@@ -279,40 +376,6 @@ def execute_query(cursor, query, params=None, max_rows=None):
     except oracledb.Error as e:
         raise ValueError(f"SQL実行エラー: {str(e)}")
 
-def get_db_connection():
-    """
-    データベース接続を確立し、接続オブジェクトとカーソルを返す関数
-    """
-    # 環境変数を読み込む
-    load_dotenv(find_dotenv())
-    
-    # 必要な環境変数のリスト
-    required_env_vars = [
-        "DB_USER",
-        "DB_PASSWORD",
-        "DB_DSN"
-    ]
-    
-    # 環境変数の存在確認
-    missing_vars = []
-    for var in required_env_vars:
-        if not os.getenv(var):
-            missing_vars.append(var)
-    
-    if missing_vars:
-        raise ValueError(f"以下の環境変数が設定されていません: {', '.join(missing_vars)}")
-    
-    # 環境変数から設定を読み込む
-    USERNAME = os.getenv("DB_USER")
-    PASSWORD = os.getenv("DB_PASSWORD")
-    DSN = os.getenv("DB_DSN")
-
-    # データベース接続
-    db_connection = oracledb.connect(user=USERNAME, password=PASSWORD, dsn=DSN)
-    cursor = db_connection.cursor()
-    
-    return db_connection, cursor
-
 def execute(query, params=None, max_length=DEFAULT_MAX_LENGTH, max_rows=DEFAULT_MAX_ROWS):
     """
     クエリを実行し、結果を整形して表示する関数
@@ -321,46 +384,52 @@ def execute(query, params=None, max_length=DEFAULT_MAX_LENGTH, max_rows=DEFAULT_
     max_length: 応答の最大文字数（デフォルト: DEFAULT_MAX_LENGTH）
     max_rows: 取得する最大行数（デフォルト: DEFAULT_MAX_ROWS）
     """
+    global cursor  # グローバル変数を参照
+    
     try:
-        # データベース接続
-        db_connection, cursor = get_db_connection()
+        # SELECT AIクエリの場合は事前チェックを通過させる
+        is_ai_query = bool(re.search(r'^\s*SELECT\s+AI\s+', query, re.IGNORECASE))
         
-        try:
-            # クエリの実行と結果の表示
-            results, more_rows_exist = execute_query(cursor, query, params, max_rows)
-            
-            # 結果を文字列に変換
-            processed_results = []
-            for row in results:
-                processed_row = []
-                for value in row:
-                    try:
-                        if isinstance(value, oracledb.LOB):
-                            if hasattr(value, "type") and value.type == oracledb.DB_TYPE_BLOB:
-                                # BLOBデータの場合はサイズを表示
-                                processed_row.append(f"<BLOBデータ: {value.size()} bytes>")
-                            elif hasattr(value, "type") and value.type == oracledb.DB_TYPE_CLOB:
-                                processed_row.append(str(value))
-                            elif hasattr(value, "type") and value.type == oracledb.DB_TYPE_BFILE:
-                                processed_row.append(f"<BFILEデータです>")
-                        elif value is None:
-                            # NULL値の場合は空文字列を表示
-                            processed_row.append("")
-                        else:
-                            # その他の値は文字列に変換
+        # PL/SQLブロックの場合の特別処理
+        if re.search(r'^\s*BEGIN\s+', query, re.IGNORECASE):
+            try:
+                cursor.execute(query)
+                cursor.connection.commit()
+                return "PL/SQLプロシージャが正常に完了しました。"
+            except oracledb.Error as e:
+                cursor.connection.rollback()
+                raise ValueError(f"PL/SQL実行エラー: {str(e)}")
+        
+        # クエリの実行と結果の表示
+        results, more_rows_exist = execute_query(cursor, query, params, max_rows)
+        
+        # 結果を文字列に変換
+        processed_results = []
+        for row in results:
+            processed_row = []
+            for value in row:
+                try:
+                    if isinstance(value, oracledb.LOB):
+                        if hasattr(value, "type") and value.type == oracledb.DB_TYPE_BLOB:
+                            # BLOBデータの場合はサイズを表示
+                            processed_row.append(f"<BLOBデータ: {value.size()} bytes>")
+                        elif hasattr(value, "type") and value.type == oracledb.DB_TYPE_CLOB:
                             processed_row.append(str(value))
-                    except Exception as e:
-                        processed_row.append(f"<表示エラー: {str(e)}>")
-                processed_results.append(tuple(processed_row))
-            
-            # 結果を表示
-            formated_results = format_results(cursor, processed_results, max_length, more_rows_exist)
-            return formated_results
-            
-        finally:
-            # リソースの解放
-            cursor.close()
-            db_connection.close()
+                        elif hasattr(value, "type") and value.type == oracledb.DB_TYPE_BFILE:
+                            processed_row.append(f"<BFILEデータです>")
+                    elif value is None:
+                        # NULL値の場合は空文字列を表示
+                        processed_row.append("")
+                    else:
+                        # その他の値は文字列に変換
+                        processed_row.append(str(value))
+                except Exception as e:
+                    processed_row.append(f"<表示エラー: {str(e)}>")
+            processed_results.append(tuple(processed_row))
+        
+        # 結果を表示
+        formated_results = format_results(cursor, processed_results, max_length, more_rows_exist)
+        return formated_results
             
     except Exception as e:
         error_message = f"エラーが発生しました: {str(e)}"
@@ -381,11 +450,39 @@ mcp = FastMCP("ORACLE")
             文字数制限にかかったときは、max_lengthを大きくしてください。
             行数制限にかかったときは、max_rowsを大きくしてください。
             結果をマークダウンで表示する場合には、テーブル名に含まれる$記号記号が特殊文字として扱われるため、バックスラッシュでエスケープすることを忘れないでください。
+            Oracle Database 23aiの「SELECT AI NARRATE」などのAI機能をサポートしています。
     """)
 def execute_oracle(query: str, params: dict = None, max_length: int = DEFAULT_MAX_LENGTH, max_rows: int = DEFAULT_MAX_ROWS) -> str:
     try:
-        results = execute(query, params, max_length, max_rows)
-        return [types.TextContent(type="text", text=str(results))]
+        # EXEC DBMS_CLOUD_AI.SET_PROFILE形式のクエリを処理
+        exec_pattern = r'EXEC\s+DBMS_CLOUD_AI\.SET_PROFILE\s*\((.*)\)'
+        match = re.match(exec_pattern, query, re.IGNORECASE)
+        
+        if match:
+            args = match.group(1)
+            
+            # 引数を解析し、パラメータ名を追加
+            formatted_args = args.strip()
+            
+            # パラメータ名が含まれているかチェック
+            if "=>" not in formatted_args and ":" not in formatted_args:
+                formatted_args = f"profile_name => {formatted_args}"
+            
+            # PL/SQLブロックに変換
+            pl_sql_block = f"""
+BEGIN
+  DBMS_CLOUD_AI.SET_PROFILE(
+    {formatted_args}
+  );
+END;
+"""
+            # 変換後のクエリで実行
+            result = execute(pl_sql_block, params, max_length, max_rows)
+            return [types.TextContent(type="text", text=result)]
+        
+        # 通常のクエリを実行
+        result = execute(query, params, max_length, max_rows)
+        return [types.TextContent(type="text", text=result)]
     except Exception as e:
         return [types.TextContent(type="text", text=str(e))]
     
@@ -416,7 +513,10 @@ def describe_table(table_name: str, owner: str = None) -> str:
                 raise ValueError(f"テーブル名に不正な文字が含まれています: {char}")
                 
         return table_name
+
     try:
+        global cursor  # グローバル変数を参照
+        
         # 基本的なサニタイゼーション
         table_name = sanitize_table_name(table_name)
         
@@ -424,87 +524,78 @@ def describe_table(table_name: str, owner: str = None) -> str:
         if owner:
             owner = sanitize_table_name(owner)
         
-        # データベース接続
-        db_connection, cursor = get_db_connection()
+        # テーブルのカラム情報を取得（より安全なクエリ）
+        query = """
+        SELECT 
+            column_name,
+            data_type,
+            CASE 
+                WHEN data_type IN ('VARCHAR2', 'CHAR', 'NVARCHAR2', 'NCHAR') 
+                    THEN TO_CHAR(data_length)
+                WHEN data_type = 'NUMBER' AND data_precision IS NOT NULL 
+                    THEN TO_CHAR(data_precision) || ',' || TO_CHAR(data_scale)
+                ELSE NULL
+            END as data_length,
+            nullable
+        FROM all_tab_columns
+        WHERE table_name = :1
+        """
+        if owner:
+            query += " AND owner = :2"
+            params = [table_name.upper(), owner.upper()]
+        else:
+            params = [table_name.upper()]
+        query += " ORDER BY column_id"
         
-        try:
-            # テーブルのカラム情報を取得（より安全なクエリ）
-            query = """
-            SELECT 
-                column_name,
-                data_type,
-                CASE 
-                    WHEN data_type IN ('VARCHAR2', 'CHAR', 'NVARCHAR2', 'NCHAR') 
-                        THEN TO_CHAR(data_length)
-                    WHEN data_type = 'NUMBER' AND data_precision IS NOT NULL 
-                        THEN TO_CHAR(data_precision) || ',' || TO_CHAR(data_scale)
-                    ELSE NULL
-                END as data_length,
-                nullable
-            FROM all_tab_columns
-            WHERE table_name = :1
-            """
-            if owner:
-                query += " AND owner = :2"
-                params = [table_name.upper(), owner.upper()]
+        # コメント情報を取得
+        comment_query = """
+        SELECT column_name, comments
+        FROM all_col_comments
+        WHERE table_name = :1
+        """
+        if owner:
+            comment_query += " AND owner = :2"
+            comment_params = [table_name.upper(), owner.upper()]
+        else:
+            comment_params = [table_name.upper()]
+        
+        # カラム情報を取得
+        columns, _ = execute_query(cursor, query, params)
+        if not columns:
+            raise ValueError(f"テーブル '{table_name}' が見つかりません")
+        
+        # コメント情報を取得
+        comments, _ = execute_query(cursor, comment_query, comment_params)
+        comments_dict = {row[0]: row[1] for row in comments}
+        
+        # 結果を整形
+        output = []
+        output.append(f"\nテーブル: {table_name}")
+        output.append("-" * 5)
+        output.append("名前\t\t\t\tNULL?\t型\t\t\t長さ\tコメント")
+        output.append("-" * 5)
+        
+        for column in columns:
+            column_name, data_type, data_length, nullable = column
+            comment = comments_dict.get(column_name, "")
+            
+            # データ型の表示を整形
+            if data_type in ('VARCHAR2', 'CHAR', 'NVARCHAR2', 'NCHAR'):
+                type_display = f"{data_type}({data_length})"
+            elif data_type == 'NUMBER' and data_length:
+                type_display = f"NUMBER({data_length})"
             else:
-                params = [table_name.upper()]
-            query += " ORDER BY column_id"
+                type_display = data_type
             
-            # コメント情報を取得
-            comment_query = """
-            SELECT column_name, comments
-            FROM all_col_comments
-            WHERE table_name = :1
-            """
-            if owner:
-                comment_query += " AND owner = :2"
-                comment_params = [table_name.upper(), owner.upper()]
-            else:
-                comment_params = [table_name.upper()]
+            # NULL許可の表示
+            nullable_display = "Y" if nullable == 'Y' else "N"
             
-            # カラム情報を取得
-            columns, _ = execute_query(cursor, query, params)
-            if not columns:
-                raise ValueError(f"テーブル '{table_name}' が見つかりません")
-            
-            # コメント情報を取得
-            comments, _ = execute_query(cursor, comment_query, comment_params)
-            comments_dict = {row[0]: row[1] for row in comments}
-            
-            # 結果を整形
-            output = []
-            output.append(f"\nテーブル: {table_name}")
-            output.append("-" * 5)
-            output.append("名前\t\t\t\tNULL?\t型\t\t\t長さ\tコメント")
-            output.append("-" * 5)
-            
-            for column in columns:
-                column_name, data_type, data_length, nullable = column
-                comment = comments_dict.get(column_name, "")
-                
-                # データ型の表示を整形
-                if data_type in ('VARCHAR2', 'CHAR', 'NVARCHAR2', 'NCHAR'):
-                    type_display = f"{data_type}({data_length})"
-                elif data_type == 'NUMBER' and data_length:
-                    type_display = f"NUMBER({data_length})"
-                else:
-                    type_display = data_type
-                
-                # NULL許可の表示
-                nullable_display = "Y" if nullable == 'Y' else "N"
-                
-                # 行を整形
-                output.append(f"{column_name.ljust(30)}\t{nullable_display}\t{type_display.ljust(20)}\t{data_length or ''}\t{comment}")
-            
-            results = "\n".join(output)
-            
-            return [types.TextContent(type="text", text=str(results))]
-            
-        finally:
-            # リソースの解放
-            cursor.close()
-            db_connection.close()
+            # 行を整形
+            output.append(f"{column_name.ljust(30)}\t{nullable_display}\t{type_display.ljust(20)}\t{data_length or ''}\t{comment}")
+        
+        results = "\n".join(output)
+        
+        return [types.TextContent(type="text", text=str(results))]
             
     except Exception as e:
         return [types.TextContent(type="text", text=str(e))]
@@ -527,90 +618,83 @@ def describe_table(table_name: str, owner: str = None) -> str:
     """)
 def list_tables(max_rows: int = DEFAULT_MAX_ROWS, name_pattern: str = None, order_by: str = 'TABLE_NAME', include_internal_tables: bool = False, use_all_tables: bool = False, owner: str = None) -> str:
     try:
-        # データベース接続
-        db_connection, cursor = get_db_connection()
+        global cursor  # グローバル変数を参照
         
-        try:
-            # 並び順の検証
-            if order_by not in ['TABLE_NAME', 'CREATED']:
-                order_by = 'TABLE_NAME'  # デフォルトに戻す
-                
-            # 内部テーブルを除外する条件
-            internal_table_condition = "AND t.table_name NOT LIKE '%$%'" if not include_internal_tables else ""
+        # 並び順の検証
+        if order_by not in ['TABLE_NAME', 'CREATED']:
+            order_by = 'TABLE_NAME'  # デフォルトに戻す
             
-            # ALL_TABLESを使用する場合、OWNERの指定を必須にする
-            if use_all_tables and not owner:
-                raise ValueError("ALL_TABLESを使用する場合、OWNERを指定する必要があります。")
-            
-            # テーブルソースを選択
-            table_source = 'ALL_TABLES' if use_all_tables else 'USER_TABLES'
-            
-            # テーブル一覧を取得
-            if use_all_tables:
-                query = f"""
-                SELECT 
-                    t.table_name,
-                    t.tablespace_name,
-                    TO_CHAR(t.last_analyzed, 'YYYY-MM-DD HH24:MI:SS') as last_analyzed,
-                    TO_CHAR(t.num_rows) as num_rows,
-                    TO_CHAR(o.created, 'YYYY-MM-DD HH24:MI:SS') as created_date
-                FROM {table_source} t
-                JOIN all_objects o ON t.table_name = o.object_name AND o.object_type = 'TABLE'
-                WHERE t.owner = :2 {internal_table_condition}
-                """
-                if name_pattern:
-                    query += " AND t.table_name LIKE :1"
-                    params = [name_pattern.upper(), owner.upper() if owner else None]
-                else:
-                    params = [owner.upper() if owner else None]
-                query += f" ORDER BY {order_by}"
+        # 内部テーブルを除外する条件
+        internal_table_condition = "AND t.table_name NOT LIKE '%$%'" if not include_internal_tables else ""
+        
+        # ALL_TABLESを使用する場合、OWNERの指定を必須にする
+        if use_all_tables and not owner:
+            raise ValueError("ALL_TABLESを使用する場合、OWNERを指定する必要があります。")
+        
+        # テーブルソースを選択
+        table_source = 'ALL_TABLES' if use_all_tables else 'USER_TABLES'
+        
+        # テーブル一覧を取得
+        if use_all_tables:
+            query = f"""
+            SELECT 
+                t.table_name,
+                t.tablespace_name,
+                TO_CHAR(t.last_analyzed, 'YYYY-MM-DD HH24:MI:SS') as last_analyzed,
+                TO_CHAR(t.num_rows) as num_rows,
+                TO_CHAR(o.created, 'YYYY-MM-DD HH24:MI:SS') as created_date
+            FROM {table_source} t
+            JOIN all_objects o ON t.table_name = o.object_name AND o.object_type = 'TABLE'
+            WHERE t.owner = :2 {internal_table_condition}
+            """
+            if name_pattern:
+                query += " AND t.table_name LIKE :1"
+                params = [name_pattern.upper(), owner.upper() if owner else None]
             else:
-                query = f"""
-                SELECT 
-                    t.table_name,
-                    t.tablespace_name,
-                    TO_CHAR(t.last_analyzed, 'YYYY-MM-DD HH24:MI:SS') as last_analyzed,
-                    TO_CHAR(t.num_rows) as num_rows,
-                    TO_CHAR(o.created, 'YYYY-MM-DD HH24:MI:SS') as created_date
-                FROM {table_source} t
-                JOIN all_objects o ON t.table_name = o.object_name AND o.object_type = 'TABLE'
-                WHERE 1=1 {internal_table_condition}
-                """
-                if name_pattern:
-                    query += " AND t.table_name LIKE :1"
-                    params = [name_pattern.upper()]
-                else:
-                    params = None
-                query += f" ORDER BY {order_by}"
-                
-            # テーブル一覧を取得
-            results, more_rows_exist = execute_query(cursor, query, params, max_rows)
+                params = [owner.upper() if owner else None]
+            query += f" ORDER BY {order_by}"
+        else:
+            query = f"""
+            SELECT 
+                t.table_name,
+                t.tablespace_name,
+                TO_CHAR(t.last_analyzed, 'YYYY-MM-DD HH24:MI:SS') as last_analyzed,
+                TO_CHAR(t.num_rows) as num_rows,
+                TO_CHAR(o.created, 'YYYY-MM-DD HH24:MI:SS') as created_date
+            FROM {table_source} t
+            JOIN all_objects o ON t.table_name = o.object_name AND o.object_type = 'TABLE'
+            WHERE 1=1 {internal_table_condition}
+            """
+            if name_pattern:
+                query += " AND t.table_name LIKE :1"
+                params = [name_pattern.upper()]
+            else:
+                params = None
+            query += f" ORDER BY {order_by}"
             
-            if not results:
-                return [types.TextContent(type="text", text="テーブルが見つかりません")]
+        # テーブル一覧を取得
+        results, more_rows_exist = execute_query(cursor, query, params, max_rows)
+        
+        if not results:
+            return [types.TextContent(type="text", text="テーブルが見つかりません")]
+        
+        # 結果を整形
+        output = []
+        output.append("\nテーブル一覧:")
+        output.append("-" * 100)
+        output.append("テーブル名\t\t\t\tテーブルスペース\t\t最終分析日時\t\t\t行数\t\t作成日時")
+        output.append("-" * 100)
+        
+        for row in results:
+            table_name, tablespace_name, last_analyzed, num_rows, created_date = row
+            output.append(f"{table_name.ljust(30)}\t{(tablespace_name or '').ljust(20)}\t{(last_analyzed or '').ljust(20)}\t{(num_rows or '').ljust(10)}\t{created_date or ''}")
+        
+        if more_rows_exist:
+            output.append("\n(行数制限により以降は省略。max_rows値を増やして再実行してください。)")
             
-            # 結果を整形
-            output = []
-            output.append("\nテーブル一覧:")
-            output.append("-" * 100)
-            output.append("テーブル名\t\t\t\tテーブルスペース\t\t最終分析日時\t\t\t行数\t\t作成日時")
-            output.append("-" * 100)
-            
-            for row in results:
-                table_name, tablespace_name, last_analyzed, num_rows, created_date = row
-                output.append(f"{table_name.ljust(30)}\t{(tablespace_name or '').ljust(20)}\t{(last_analyzed or '').ljust(20)}\t{(num_rows or '').ljust(10)}\t{created_date or ''}")
-            
-            if more_rows_exist:
-                output.append("\n(行数制限により以降は省略。max_rows値を増やして再実行してください。)")
-                
-            results = "\n".join(output)
-            
-            return [types.TextContent(type="text", text=str(results))]
-            
-        finally:
-            # リソースの解放
-            cursor.close()
-            db_connection.close()
+        results = "\n".join(output)
+        
+        return [types.TextContent(type="text", text=str(results))]
             
     except Exception as e:
         return [types.TextContent(type="text", text=str(e))]
@@ -618,5 +702,12 @@ def list_tables(max_rows: int = DEFAULT_MAX_ROWS, name_pattern: str = None, orde
 
 
 if __name__ == "__main__":
+    # データベース接続を初期化
+    initialize_db_connection()
+    
     # stdioで通信
-    mcp.run(transport="stdio")
+    try:
+        mcp.run(transport="stdio")
+    finally:
+        # プログラム終了時にデータベース接続をクリーンアップ
+        cleanup_db_connection()
