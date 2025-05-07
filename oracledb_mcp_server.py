@@ -166,7 +166,7 @@ def validate_query(query):
     
     # SELECT文であることを確認
     if stmt.get_type() != 'SELECT':
-        raise ValueError("SELECT文以外のクエリは実行できません")
+        raise ValueError("SELECT文と、DBMS_CLOUD_AI関連のPL/SQLブロック、EXEC DBMS_CLOUD_AI.SET_PROFILE() 以外の SQL は実行できません")
     
     # トークンを解析してUNIONとINTOをチェック
     for i, token in enumerate(stmt.tokens):
