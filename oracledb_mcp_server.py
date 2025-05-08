@@ -440,7 +440,7 @@ mcp = FastMCP("ORACLE")
 @mcp.tool(
     name = "execute_oracle",
     description = f"""
-    Oracle Databaseに対してSQLクエリを実行し、結果をフォーマットして返す。
+    Oracle Databaseに対してSQLクエリ、PL/SQLブロック、RAG を実行し、結果を返します。
         Args:
             query: 実行するSQLクエリ（必須）
             params: バインド変数に使用するパラメータ（辞書型　例：{{"parameter1": 5}}）
@@ -454,6 +454,7 @@ mcp = FastMCP("ORACLE")
             SELECT文とDBMS_CLOUD_AIパッケージの GENERATE、GET_PROFILE、SET_PROFILE、CREATE_VECTOR_INDEX、CREATE_PROFILE もサポートしています。
             RAGで質問するためには EXEC DBMS_CLOUD_AI.SET_PROFILE() で AI Profile を設定してから SELECT AI NARRATE で質問してください。
             利用可能な AI Profile は "SELECT PROFILE_NAME, STATUS, DESCRIPTION FROM USER_CLOUD_AI_PROFILES" で確認できます。
+            SELECT AI NARRATE の構文は、"SELECT AI NARRATE '質問内容'" です。NARRATE の後には必ず半角スペースを入れてください。
     """)
 def execute_oracle(query: str, params: dict = None, max_length: int = DEFAULT_MAX_LENGTH, max_rows: int = DEFAULT_MAX_ROWS) -> str:
     try:
