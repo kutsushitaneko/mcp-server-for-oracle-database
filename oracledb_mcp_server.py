@@ -303,7 +303,7 @@ def format_results(cursor, results, max_length=DEFAULT_MAX_LENGTH, more_rows_exi
 def execute_query(cursor, query, params=None, max_rows=None):
     """
     SELECT文のみを実行する関数
-    params: バインド変数に使用するパラメータ（辞書型）
+    params: バインド変数に使用するパラメータ（辞書型または配列）
     max_rows: 取得する最大行数
     """
     global db_connection  # グローバル変数を参照
@@ -344,7 +344,11 @@ def execute_query(cursor, query, params=None, max_rows=None):
     
     try:
         if params:
-            cursor.execute(query, params)
+            # パラメータが辞書型か配列かを判断して適切に実行
+            if isinstance(params, dict):
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query, params)
         else:
             cursor.execute(query)
             
@@ -452,9 +456,11 @@ mcp = FastMCP("ORACLE")
             結果をマークダウンで表示する場合には、テーブル名に含まれる$記号記号が特殊文字として扱われるため、バックスラッシュでエスケープすることを忘れないでください。
             Oracle Database 23aiの「SELECT AI NARRATE」などのAI機能をサポートしています。
             SELECT文とDBMS_CLOUD_AIパッケージの GENERATE、GET_PROFILE、SET_PROFILE、CREATE_VECTOR_INDEX、CREATE_PROFILE もサポートしています。
-            RAGで質問するためには EXEC DBMS_CLOUD_AI.SET_PROFILE() で AI Profile を設定してから SELECT AI NARRATE で質問してください。
+            ドキュメントにRAGで質問するためには EXEC DBMS_CLOUD_AI.SET_PROFILE() で AI Profile を設定してから SELECT AI NARRATE で質問してください。
             利用可能な AI Profile は "SELECT PROFILE_NAME, STATUS, DESCRIPTION FROM USER_CLOUD_AI_PROFILES" で確認できます。
+            現在のセッションに設定されている AI Profile は "SELECT DBMS_CLOUD_AI.GET_PROFILE() FROM DUAL" で確認できます。
             SELECT AI NARRATE の構文は、"SELECT AI NARRATE '質問内容'" です。NARRATE の後には必ず半角スペースを入れてください。
+            ドキュメントへの質問には、RAG を使用します。データベースへの問い合わせには、SELECT文やPL/SQLブロックを使用します。
     """)
 def execute_oracle(query: str, params: dict = None, max_length: int = DEFAULT_MAX_LENGTH, max_rows: int = DEFAULT_MAX_ROWS) -> str:
     try:
@@ -506,9 +512,9 @@ def describe_table(table_name: str, owner: str = None) -> str:
         if not table_name or not isinstance(table_name, str):
             raise ValueError("テーブル名は必須で、文字列である必要があります")
             
-        # 長さチェック（Oracleの制限は30バイト）
-        if len(table_name) > 30:
-            raise ValueError("テーブル名は30文字以内である必要があります")
+        # 長さチェック（Oracleの制限は128バイト）
+        if len(table_name.encode('utf-8')) > 128:
+            raise ValueError("テーブル名は128バイト以内である必要があります")
             
         # 明らかに危険な文字のチェック
         dangerous_chars = [';', '--', '/*', '*/', "'", '"', '\x00']
@@ -614,9 +620,9 @@ def describe_table(table_name: str, owner: str = None) -> str:
             order_by: 並び順（'TABLE_NAME'または'CREATED'、デフォルト: 'TABLE_NAME'）
             include_internal_tables: 内部テーブル（名前に$記号が含まれるテーブル）を含めるかどうか（デフォルト: False）
             use_all_tables: ALL_TABLESを参照するかどうか（デフォルト: False）
-            owner: テーブルの所有者（use_all_tablesがTrueの場合は必須）
+            owner: テーブルの所有者（指定するとALL_TABLESが自動的に使用されます）
         ヒント:
-            所有者を指定する場合は use_all_tables を True にして、owner を指定してください。
+            所有者を指定すると自動的に ALL_TABLES が使用されます。
             特定のパターンに一致するテーブルのみを表示するには name_pattern を使用してください。
             テーブル名は基本的に大文字で格納されているため、パターンも大文字で指定すると良いでしょう。
     """)
@@ -631,9 +637,9 @@ def list_tables(max_rows: int = DEFAULT_MAX_ROWS, name_pattern: str = None, orde
         # 内部テーブルを除外する条件
         internal_table_condition = "AND t.table_name NOT LIKE '%$%'" if not include_internal_tables else ""
         
-        # ALL_TABLESを使用する場合、OWNERの指定を必須にする
-        if use_all_tables and not owner:
-            raise ValueError("ALL_TABLESを使用する場合、OWNERを指定する必要があります。")
+        # ownerが指定された場合は自動的にuse_all_tablesをTrueに設定
+        if owner:
+            use_all_tables = True
         
         # テーブルソースを選択
         table_source = 'ALL_TABLES' if use_all_tables else 'USER_TABLES'
@@ -649,13 +655,27 @@ def list_tables(max_rows: int = DEFAULT_MAX_ROWS, name_pattern: str = None, orde
                 TO_CHAR(o.created, 'YYYY-MM-DD HH24:MI:SS') as created_date
             FROM {table_source} t
             JOIN all_objects o ON t.table_name = o.object_name AND o.object_type = 'TABLE'
-            WHERE t.owner = :2 {internal_table_condition}
             """
-            if name_pattern:
-                query += " AND t.table_name LIKE :1"
-                params = [name_pattern.upper(), owner.upper() if owner else None]
+            
+            if owner:
+                query += " WHERE t.owner = :owner"
+                if not include_internal_tables:
+                    query += " AND t.table_name NOT LIKE '%$%'"
+                if name_pattern:
+                    query += " AND t.table_name LIKE :pattern"
+                    params = {"pattern": name_pattern.upper(), "owner": owner.upper()}
+                else:
+                    params = {"owner": owner.upper()}
             else:
-                params = [owner.upper() if owner else None]
+                query += " WHERE 1=1"
+                if not include_internal_tables:
+                    query += " AND t.table_name NOT LIKE '%$%'"
+                if name_pattern:
+                    query += " AND t.table_name LIKE :pattern"
+                    params = {"pattern": name_pattern.upper()}
+                else:
+                    params = None
+                    
             query += f" ORDER BY {order_by}"
         else:
             query = f"""
